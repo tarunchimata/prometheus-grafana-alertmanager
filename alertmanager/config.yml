@@ -1,7 +1,11 @@
 route:
-    receiver: 'pager'
+    receiver: 'slack'
 
 receivers:
-    - name: 'pager'
-      webhook_configs:
-      - url: https://ngrok.io # replace with your PagerTree webhook url
+    - name: 'slack'
+      slack_configs:
+          - send_resolved: true
+            text: "{{ .CommonAnnotations.description }}"
+            username: 'Prometheus'
+            channel: '#<channel-name>'
+            api_url: 'https://hooks.slack.com/services/<webhook-id>'

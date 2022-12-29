@@ -1,168 +1,383 @@
-# Contents
+# dockprom
 
-* [Overview](#a-prometheus--grafana-docker-compose-stack)
-* [Pre-requisites](#pre-requisites)
-* [Installation & Configuration](#installation--configuration)
-   * [Post Configuration](#post-configuration)
-      * [Datasource Configuration](#datasource-configuration)
-      * [Ping Configuration](#ping-configuration)
-      * [Alert Configuration](#alert-configuration)
-* [Dashboards](#dashboards)
-    * [Ping Dashboard](#ping-dashboard)
-    * [System Monitoring Dashboard](#system-monitoring-dashboard)
-* [Test Alerts](#test-alerts)
-* [Utility Scripts](#utility-scripts)
-* [Security Considerations](#security-considerations)
-   * [Production Security](#production-security)
-* [Troubleshooting](#troubleshooting)
-   * [Mac Users](#mac-users)
+A monitoring solution for Docker hosts and containers with [Prometheus](https://prometheus.io/), [Grafana](http://grafana.org/), [cAdvisor](https://github.com/google/cadvisor),
+[NodeExporter](https://github.com/prometheus/node_exporter) and alerting with [AlertManager](https://github.com/prometheus/alertmanager).
 
-# A Prometheus & Grafana docker-compose stack
+## Install
 
-Here's a quick start to stand-up a [Prometheus](http://prometheus.io/) stack containing Prometheus, [Grafana](https://grafana.com/) and to monitor website uptime.
+Clone this repository on your Docker host, cd into dockprom directory and run compose up:
 
-Here are links to the [blog](https://pagertree.com/2017/12/01/prometheus-tutorial/) and [video](https://youtu.be/-STqqJZG36w) tutorials so you can follow along.
+```bash
+git clone https://github.com/stefanprodan/dockprom
+cd dockprom
 
-# Pre-requisites
-
-This tutorial assumes you are running on a Ubuntu 16.04 server. I like using [this](https://www.digitalocean.com/products/one-click-apps/docker/) Digital Ocean image. You can also use your own service provider.
-
-Once you have your Ubuntu node ready, go to the [Installation & Configuration](#installation--configuration) section below.
-
-## Digital Ocean Setup (Optional)
-
-If you already have a [Digital Ocean](https://www.digitalocean.com/) account, you can click [here](https://cloud.digitalocean.com/droplets/new?image=docker) to create a new droplet.
-
-If you don't already have a [Digital Ocean](https://www.digitalocean.com/) account, create one using [this link](https://m.do.co/c/ab4304b8ca5a) to create an account and get **$10 in credits** when you create your account.
-
-For this demo the smallest standard droplet will do. If you don't know how to create a droplet or how to SSH into it you can follow my  [demo on Medium](https://medium.com/@armiiller/create-a-docker-droplet-on-digital-ocean-f19db2b4be53).
-
-# Installation & Configuration
-For a one click install experience run the following command:
-```curl
-curl https://raw.githubusercontent.com/PagerTree/prometheus-grafana-alertmanager-example/master/install.sh -H 'Cache-Control: no-cache' | sudo sh
+ADMIN_USER='admin' ADMIN_PASSWORD='admin' ADMIN_PASSWORD_HASH='$2a$14$1l.IozJx7xQRVmlkEQ32OeEEfP5mRxTpbDTCTcXRqn19gXD8YK1pO' docker-compose up -d
 ```
 
-At this point you'll have automagically deployed the entire Grafana and Prometheus stack. You can now access the Grafana dashboard at `http://<Host IP Address>:3000` *Username: `admin`, Password: `9uT46ZKE`*. *Note: before the dashboards will work you need to follow the [Datasource Configuration section](#datasource-configuration).*
+**Caddy v2 does not accept plaintext passwords. It MUST be provided as a hash value. The above password hash corresponds to ADMIN_PASSWORD 'admin'. To know how to generate hash password, refer [Updating Caddy to v2](#Updating-Caddy-to-v2)**
 
-Here's a list of all the services that are created:
+Prerequisites:
 
-| Service | Port | Description | Notes |
-| --- |:---:| --- | --- |
-| Prometheus | :9090 | Data Aggregator | |
-| Alert Manager | :9093 | Adds Alerting for Prometheus Checks | |
-| Grafana | :3000 | UI To Show Prometheus Data | Username: `admin`, Password: `9uT46ZKE`|
-| Node Exporter | :9100 | Data Collector for Computer Stats | |
-| CA Advisor | :8080 | Collect resource usage of the Docker container | |
-| Blackbox Exporter | :9115 | Data Collector for Ping & Uptime | | |
+* Docker Engine >= 1.13
+* Docker Compose >= 1.11
 
-## Post Configuration
+## Updating Caddy to v2
 
-### Ping Configuration
+Perform a `docker run --rm caddy caddy hash-password --plaintext 'ADMIN_PASSWORD'` in order to generate a hash for your new password.
+ENSURE that you replace `ADMIN_PASSWORD` with new plain text password and `ADMIN_PASSWORD_HASH` with the hashed password references in [docker-compose.yml](./docker-compose.yml) for the caddy container.
 
-If you would like to add or change the Ping targets should be monitored you'll want to edit the `targets` section in [prometheus/prometheus.yml](prometheus/prometheus.yml)
+Containers:
 
-```yml
-...
+* Prometheus (metrics database) `http://<host-ip>:9090`
+* Prometheus-Pushgateway (push acceptor for ephemeral and batch jobs) `http://<host-ip>:9091`
+* AlertManager (alerts management) `http://<host-ip>:9093`
+* Grafana (visualize metrics) `http://<host-ip>:3000`
+* NodeExporter (host metrics collector)
+* cAdvisor (containers metrics collector)
+* Caddy (reverse proxy and basic auth provider for prometheus and alertmanager)
 
-- job_name: 'blackbox'
-  metrics_path: /probe
-  params:
-    module: [http_2xx]
-  static_configs:
-    - targets:
-      - https://pagertree.com # edit here
-      - https://google.com # edit here
+## Setup Grafana
 
-...
+Navigate to `http://<host-ip>:3000` and login with user ***admin*** password ***admin***. You can change the credentials in the compose file or by supplying the `ADMIN_USER` and `ADMIN_PASSWORD` environment variables on compose up. The config file can be added directly in grafana part like this
+
+```yaml
+grafana:
+  image: grafana/grafana:7.2.0
+  env_file:
+    - config
 ```
 
-If you made changes to the Prometheus config you'll want to reload the configuration using the following command:
+and the config file format should have this content
 
-```curl
-curl -X POST http://<Host IP Address>:9090/-/reload
+```yaml
+GF_SECURITY_ADMIN_USER=admin
+GF_SECURITY_ADMIN_PASSWORD=changeme
+GF_USERS_ALLOW_SIGN_UP=false
 ```
 
-### Alert Configuration
-The [PagerTree](https://pagertree.com) configuration requires to create a Prometheus Integration. Follow steps 1-6 [here](https://pagertree.com/knowledge-base/integration-prometheus/#in-pagertree) then replace `https://ngrok.io` in [/alertmanager/config.yml](/alertmanager/config.yml) with your copied webhook.
+If you want to change the password, you have to remove this entry, otherwise the change will not take effect
 
-```yml
-...
+```yaml
+- grafana_data:/var/lib/grafana
+```
+
+Grafana is preconfigured with dashboards and Prometheus as the default data source:
+
+* Name: Prometheus
+* Type: Prometheus
+* Url: [http://prometheus:9090](http://prometheus:9090)
+* Access: proxy
+
+***Docker Host Dashboard***
+
+![Host](https://raw.githubusercontent.com/stefanprodan/dockprom/master/screens/Grafana_Docker_Host.png)
+
+The Docker Host Dashboard shows key metrics for monitoring the resource usage of your server:
+
+* Server uptime, CPU idle percent, number of CPU cores, available memory, swap and storage
+* System load average graph, running and blocked by IO processes graph, interrupts graph
+* CPU usage graph by mode (guest, idle, iowait, irq, nice, softirq, steal, system, user)
+* Memory usage graph by distribution (used, free, buffers, cached)
+* IO usage graph (read Bps, read Bps and IO time)
+* Network usage graph by device (inbound Bps, Outbound Bps)
+* Swap usage and activity graphs
+
+For storage and particularly Free Storage graph, you have to specify the fstype in grafana graph request.
+You can find it in `grafana/provisioning/dashboards/docker_host.json`, at line 480 :
+
+```yaml
+"expr": "sum(node_filesystem_free_bytes{fstype=\"btrfs\"})",
+```
+
+I work on BTRFS, so i need to change `aufs` to `btrfs`.
+
+You can find right value for your system in Prometheus `http://<host-ip>:9090` launching this request :
+
+```yaml
+node_filesystem_free_bytes
+```
+
+***Docker Containers Dashboard***
+
+![Containers](https://raw.githubusercontent.com/stefanprodan/dockprom/master/screens/Grafana_Docker_Containers.png)
+
+The Docker Containers Dashboard shows key metrics for monitoring running containers:
+
+* Total containers CPU load, memory and storage usage
+* Running containers graph, system load graph, IO usage graph
+* Container CPU usage graph
+* Container memory usage graph
+* Container cached memory usage graph
+* Container network inbound usage graph
+* Container network outbound usage graph
+
+Note that this dashboard doesn't show the containers that are part of the monitoring stack.
+
+For storage and particularly Storage Load graph, you have to specify the fstype in grafana graph request.
+You can find it in `grafana/provisioning/dashboards/docker_containers.json`, at line 406 :
+
+```yaml
+"expr": "(node_filesystem_size_bytes{fstype=\"btrfs\"} - node_filesystem_free_bytes{fstype=\"btrfs\"}) / node_filesystem_size_bytes{fstype=\"btrfs\"}  * 100"，
+```
+
+I work on BTRFS, so i need to change `aufs` to `btrfs`.
+
+You can find right value for your system in Prometheus `http://<host-ip>:9090` launching this request :
+
+```yaml
+node_filesystem_size_bytes
+node_filesystem_free_bytes
+```
+
+***Monitor Services Dashboard***
+
+![Monitor Services](https://raw.githubusercontent.com/stefanprodan/dockprom/master/screens/Grafana_Prometheus.png)
+
+The Monitor Services Dashboard shows key metrics for monitoring the containers that make up the monitoring stack:
+
+* Prometheus container uptime, monitoring stack total memory usage, Prometheus local storage memory chunks and series
+* Container CPU usage graph
+* Container memory usage graph
+* Prometheus chunks to persist and persistence urgency graphs
+* Prometheus chunks ops and checkpoint duration graphs
+* Prometheus samples ingested rate, target scrapes and scrape duration graphs
+* Prometheus HTTP requests graph
+* Prometheus alerts graph
+
+## Define alerts
+
+Three alert groups have been setup within the [alert.rules](https://github.com/stefanprodan/dockprom/blob/master/prometheus/alert.rules) configuration file:
+
+* Monitoring services alerts [targets](https://github.com/stefanprodan/dockprom/blob/master/prometheus/alert.rules#L2-L11)
+* Docker Host alerts [host](https://github.com/stefanprodan/dockprom/blob/master/prometheus/alert.rules#L13-L40)
+* Docker Containers alerts [containers](https://github.com/stefanprodan/dockprom/blob/master/prometheus/alert.rules#L42-L69)
+
+You can modify the alert rules and reload them by making a HTTP POST call to Prometheus:
+
+```bash
+curl -X POST http://admin:admin@<host-ip>:9090/-/reload
+```
+
+***Monitoring services alerts***
+
+Trigger an alert if any of the monitoring targets (node-exporter and cAdvisor) are down for more than 30 seconds:
+
+```yaml
+- alert: monitor_service_down
+    expr: up == 0
+    for: 30s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Monitor service non-operational"
+      description: "Service {{ $labels.instance }} is down."
+```
+
+***Docker Host alerts***
+
+Trigger an alert if the Docker host CPU is under high load for more than 30 seconds:
+
+```yaml
+- alert: high_cpu_load
+    expr: node_load1 > 1.5
+    for: 30s
+    labels:
+      severity: warning
+    annotations:
+      summary: "Server under high load"
+      description: "Docker host is under high load, the avg load 1m is at {{ $value}}. Reported by instance {{ $labels.instance }} of job {{ $labels.job }}."
+```
+
+Modify the load threshold based on your CPU cores.
+
+Trigger an alert if the Docker host memory is almost full:
+
+```yaml
+- alert: high_memory_load
+    expr: (sum(node_memory_MemTotal_bytes) - sum(node_memory_MemFree_bytes + node_memory_Buffers_bytes + node_memory_Cached_bytes) ) / sum(node_memory_MemTotal_bytes) * 100 > 85
+    for: 30s
+    labels:
+      severity: warning
+    annotations:
+      summary: "Server memory is almost full"
+      description: "Docker host memory usage is {{ humanize $value}}%. Reported by instance {{ $labels.instance }} of job {{ $labels.job }}."
+```
+
+Trigger an alert if the Docker host storage is almost full:
+
+```yaml
+- alert: high_storage_load
+    expr: (node_filesystem_size_bytes{fstype="aufs"} - node_filesystem_free_bytes{fstype="aufs"}) / node_filesystem_size_bytes{fstype="aufs"}  * 100 > 85
+    for: 30s
+    labels:
+      severity: warning
+    annotations:
+      summary: "Server storage is almost full"
+      description: "Docker host storage usage is {{ humanize $value}}%. Reported by instance {{ $labels.instance }} of job {{ $labels.job }}."
+```
+
+***Docker Containers alerts***
+
+Trigger an alert if a container is down for more than 30 seconds:
+
+```yaml
+- alert: jenkins_down
+    expr: absent(container_memory_usage_bytes{name="jenkins"})
+    for: 30s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Jenkins down"
+      description: "Jenkins container is down for more than 30 seconds."
+```
+
+Trigger an alert if a container is using more than 10% of total CPU cores for more than 30 seconds:
+
+```yaml
+- alert: jenkins_high_cpu
+    expr: sum(rate(container_cpu_usage_seconds_total{name="jenkins"}[1m])) / count(node_cpu_seconds_total{mode="system"}) * 100 > 10
+    for: 30s
+    labels:
+      severity: warning
+    annotations:
+      summary: "Jenkins high CPU usage"
+      description: "Jenkins CPU usage is {{ humanize $value}}%."
+```
+
+Trigger an alert if a container is using more than 1.2GB of RAM for more than 30 seconds:
+
+```yaml
+- alert: jenkins_high_memory
+    expr: sum(container_memory_usage_bytes{name="jenkins"}) > 1200000000
+    for: 30s
+    labels:
+      severity: warning
+    annotations:
+      summary: "Jenkins high memory usage"
+      description: "Jenkins memory consumption is at {{ humanize $value}}."
+```
+
+## Setup alerting
+
+The AlertManager service is responsible for handling alerts sent by Prometheus server.
+AlertManager can send notifications via email, Pushover, Slack, HipChat or any other system that exposes a webhook interface.
+A complete list of integrations can be found [here](https://prometheus.io/docs/alerting/configuration).
+
+You can view and silence notifications by accessing `http://<host-ip>:9093`.
+
+The notification receivers can be configured in [alertmanager/config.yml](https://github.com/stefanprodan/dockprom/blob/master/alertmanager/config.yml) file.
+
+To receive alerts via Slack you need to make a custom integration by choose ***incoming web hooks*** in your Slack team app page.
+You can find more details on setting up Slack integration [here](http://www.robustperception.io/using-slack-with-the-alertmanager/).
+
+Copy the Slack Webhook URL into the ***api_url*** field and specify a Slack ***channel***.
+
+```yaml
+route:
+    receiver: 'slack'
+
 receivers:
-    - name: 'pager'
-      webhook_configs:
-      - url: https://ngrok.io # replace with your PagerTree webhook url
-...
+    - name: 'slack'
+      slack_configs:
+          - send_resolved: true
+            text: "{{ .CommonAnnotations.description }}"
+            username: 'Prometheus'
+            channel: '#<channel>'
+            api_url: 'https://hooks.slack.com/services/<webhook-id>'
 ```
 
-If you made changes to the AlertManager config you'll want to reload the configuration using the following command:
+![Slack Notifications](https://raw.githubusercontent.com/stefanprodan/dockprom/master/screens/Slack_Notifications.png)
 
-```curl
-curl -X POST http://<Host IP Address>:9093/-/reload
+## Sending metrics to the Pushgateway
+
+The [pushgateway](https://github.com/prometheus/pushgateway) is used to collect data from batch jobs or from services.
+
+To push data, simply execute:
+
+```bash
+echo "some_metric 3.14" | curl --data-binary @- http://user:password@localhost:9091/metrics/job/some_job
 ```
 
-## Dashboards
+Please replace the `user:password` part with your user and password set in the initial configuration (default: `admin:admin`).
 
-Included are two dashboards. You can always find more dashboards on the [Grafana Dashboards Page](https://grafana.com/dashboards?dataSource=prometheus).
+## Updating Grafana to v5.2.2
 
-### Ping Dashboard
+[In Grafana versions >= 5.1 the id of the grafana user has been changed](http://docs.grafana.org/installation/docker/#migration-from-a-previous-version-of-the-docker-container-to-5-1-or-later). Unfortunately this means that files created prior to 5.1 won’t have the correct permissions for later versions.
 
-Shows HTTP uptime from websites monitored. See [Ping Configuration](ping-configuration) section.
+| Version |   User  | User ID |
+|:-------:|:-------:|:-------:|
+|  < 5.1  | grafana |   104   |
+|  \>= 5.1 | grafana |   472   |
 
-<img src="images/dashboard-ping.png" alt="Ping Dashboard">
+There are two possible solutions to this problem.
 
-### System Monitoring Dashboard
+1. Change ownership from 104 to 472
+2. Start the upgraded container as user 104
 
-Shows stats like RAM, CPU, Storage of the current node.
+## Specifying a user in docker-compose.yml
 
-<img src="images/dashboard-system-monitoring.png" alt="System Monitoring Dashboard">
+To change ownership of the files run your grafana container as root and modify the permissions.
 
-## Utility Scripts
+First perform a `docker-compose down` then modify your docker-compose.yml to include the `user: root` option:
 
-We've provided some utility scripts in the `util` folder.
+```yaml
+  grafana:
+    image: grafana/grafana:5.2.2
+    container_name: grafana
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/datasources:/etc/grafana/datasources
+      - ./grafana/dashboards:/etc/grafana/dashboards
+      - ./grafana/setup.sh:/setup.sh
+    entrypoint: /setup.sh
+    user: root
+    environment:
+      - GF_SECURITY_ADMIN_USER=${ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+    expose:
+      - 3000
+    networks:
+      - monitor-net
+    labels:
+      org.label-schema.group: "monitoring"
+```
 
-| Script | Args | Description | Example |
-| --- |:---:| --- | --- |
-| docker-log.sh | service | List the logs of a docker service by name | ./util/docker-log.sh grafana |
-| docker-nuke.sh | service | Removes docker services and volumes created by this project | ./util/docker-nuke.sh |
-| docker-ssh.sh | service | SSH into a service container | ./util/docker-ssh.sh grafana |
-| high-load.sh | | Simulate high CPU load on the current computer | ./util/high-load.sh |
-| restart.sh | | Restart all services | ./util/restart.sh |
-| start.sh | | Start all services | ./util/start.sh |
-| status.sh | | Print status all services | ./util/status.sh |
-| stop.sh | | Stop all services | ./util/stop.sh |
+Perform a `docker-compose up -d` and then issue the following commands:
 
-## Alerting
+```bash
+docker exec -it --user root grafana bash
 
-There are 3 basic alerts that have been added to this stack.
+# in the container you just started:
+chown -R root:root /etc/grafana && \
+chmod -R a+r /etc/grafana && \
+chown -R grafana:grafana /var/lib/grafana && \
+chown -R grafana:grafana /usr/share/grafana
+```
 
-| Alert | Time To Fire | Description |
-| --- | :---: | --- |
-| Site Down | 30 seconds | Fires if a website check is down |
-| Service Down | 30 seconds | Fires if a service in this setup is down |
-| High Load | 30 seconds | Fires if the CPU load is greater than 50% |
+To run the grafana container as `user: 104` change your `docker-compose.yml` like such:
 
-To get alerts sent to you, follow the directions in the [Alert Configuration Section](#alert-configuration).
-
-### Test Alerts
-A quick test for your alerts is to simulate high CPU load. Run the utility script `./util/high-load.sh` and about 30 seconds or so later you should notice the incident created in [PagerTree](https://pagertree.com) (assuming you followed the [Alert Configuration Section](#alert-configuration) and you'll also get notifications.
-
-Then `Ctrl+C` to stop this command. The incident should auto resolve in PagerTree.
-
-# Security Considerations
-This project is intended to be a quick-start to get up and running with Docker and Prometheus. Security has not been implemented in this project. It is the users responsibility to implement Firewall/IpTables and SSL.
-
-Since this is a template to get started Prometheus and Alerting services are exposing their ports to allow for easy troubleshooting and understanding of how the stack works.
-
-## Production Security:
-Here are just a couple security considerations for this stack to help you get started.
-* Remove the published ports from Prometheus and Alerting services and only allow Grafana to be accessed
-* Enable SSL for Grafana with a Proxy such as [jwilder/nginx-proxy](https://hub.docker.com/r/jwilder/nginx-proxy/) or [Traefik](https://traefik.io/) with Let's Encrypt
-* Add user authentication via a Reverse Proxy [jwilder/nginx-proxy](https://hub.docker.com/r/jwilder/nginx-proxy/) or [Traefik](https://traefik.io/) for services cAdvisor, Prometheus, & Alerting as they don't support user authenticaiton
-* Terminate all services/containers via HTTPS/SSL/TLS
-
-# Troubleshooting
-It appears some people have reported no data appearing in Grafana. If this is happening to you be sure to check the time range being queried within Grafana to ensure it is using Today's date with current time.
-
-## Mac Users
-Node-Exporter is not designed to run on Mac and in fact cannot collect metrics from the Mac OS. I recommend you comment out the node-exporter section in the [docker-compose.yml](docker-compose.yml) file and instead just use the cAdvisor.
+```yaml
+  grafana:
+    image: grafana/grafana:5.2.2
+    container_name: grafana
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/datasources:/etc/grafana/datasources
+      - ./grafana/dashboards:/etc/grafana/dashboards
+      - ./grafana/setup.sh:/setup.sh
+    entrypoint: /setup.sh
+    user: "104"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+    expose:
+      - 3000
+    networks:
+      - monitor-net
+    labels:
+      org.label-schema.group: "monitoring"
+```
